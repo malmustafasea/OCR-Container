@@ -30,6 +30,7 @@
             width: 100%;
             display: none;
             cursor: crosshair;
+            touch-action: none; /* Prevents default touch actions like scrolling */
         }
         .selection-box {
             position: absolute;
@@ -337,33 +338,49 @@
             setStatus("Drag and select the text you want to extract.");
         });
 
-        // Event listeners for selection box drawing
-        imageContainer.addEventListener('mousedown', (e) => {
+        // Event listeners for selection box drawing (Mouse and Touch)
+        function handleStart(e) {
             e.preventDefault();
             isSelecting = true;
-            startX = e.offsetX;
-            startY = e.offsetY;
+            const rect = imageContainer.getBoundingClientRect();
+            const clientX = e.clientX || e.touches[0].clientX;
+            const clientY = e.clientY || e.touches[0].clientY;
+            startX = clientX - rect.left;
+            startY = clientY - rect.top;
             selectionBox.style.left = `${startX}px`;
             selectionBox.style.top = `${startY}px`;
             selectionBox.style.width = '0px';
             selectionBox.style.height = '0px';
             selectionBox.style.display = 'block';
-        });
+        }
 
-        imageContainer.addEventListener('mousemove', (e) => {
+        function handleMove(e) {
             if (!isSelecting) return;
-            const width = e.offsetX - startX;
-            const height = e.offsetY - startY;
+            const rect = imageContainer.getBoundingClientRect();
+            const clientX = e.clientX || e.touches[0].clientX;
+            const clientY = e.clientY || e.touches[0].clientY;
+            const width = clientX - rect.left - startX;
+            const height = clientY - rect.top - startY;
             
             selectionBox.style.width = `${Math.abs(width)}px`;
             selectionBox.style.height = `${Math.abs(height)}px`;
-            selectionBox.style.left = `${Math.min(startX, e.offsetX)}px`;
-            selectionBox.style.top = `${Math.min(startY, e.offsetY)}px`;
-        });
+            selectionBox.style.left = `${Math.min(startX, clientX - rect.left)}px`;
+            selectionBox.style.top = `${Math.min(startY, clientY - rect.top)}px`;
+        }
 
-        imageContainer.addEventListener('mouseup', () => {
+        function handleEnd() {
             isSelecting = false;
-        });
+        }
+
+        imageContainer.addEventListener('mousedown', handleStart);
+        imageContainer.addEventListener('mousemove', handleMove);
+        imageContainer.addEventListener('mouseup', handleEnd);
+        imageContainer.addEventListener('mouseleave', handleEnd);
+
+        imageContainer.addEventListener('touchstart', handleStart);
+        imageContainer.addEventListener('touchmove', handleMove);
+        imageContainer.addEventListener('touchend', handleEnd);
+        imageContainer.addEventListener('touchcancel', handleEnd);
 
         // Event listener for the copy button
         copyButton.addEventListener('click', () => {
