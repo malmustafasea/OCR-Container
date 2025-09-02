@@ -25,6 +25,20 @@
             height: auto;
             max-height: 50vh;
         }
+        .image-container {
+            position: relative;
+            width: 100%;
+            display: none;
+            cursor: crosshair;
+        }
+        .selection-box {
+            position: absolute;
+            border: 2px dashed #34d399; /* Tailwind green-300 */
+            background: rgba(52, 211, 153, 0.2); /* Tailwind green-300 with transparency */
+            z-index: 10;
+            display: none;
+            cursor: move;
+        }
         .message-box {
             display: none;
         }
@@ -39,9 +53,11 @@
         
         <!-- Video stream for live camera feed -->
         <video id="video-stream" autoplay playsinline class="w-full max-h-[50vh]"></video>
-        
-        <!-- Image placeholder for uploaded images -->
-        <img id="image-preview" class="w-full max-h-[50vh] hidden" alt="Image Preview">
+
+        <div id="image-container" class="image-container">
+            <img id="image-preview" class="w-full max-h-[50vh]" alt="Image Preview">
+            <div id="selection-box" class="selection-box"></div>
+        </div>
 
         <div class="flex flex-col sm:flex-row justify-center space-y-4 sm:space-y-0 sm:space-x-4 w-full">
             <button id="start-camera-btn" class="bg-indigo-600 text-white font-medium py-3 px-6 rounded-lg shadow-md hover:bg-indigo-700 transition-colors duration-200">Start Camera</button>
@@ -51,9 +67,13 @@
                 <input type="file" id="upload-image-input" class="hidden" accept="image/*" capture="environment">
             </label>
         </div>
+        
+        <button id="extract-btn" class="w-full bg-indigo-600 text-white font-medium py-3 px-6 rounded-lg shadow-md hover:bg-indigo-700 transition-colors duration-200" style="display: none;">Extract Text from Selection</button>
+        <button id="reset-btn" class="w-full bg-gray-400 text-gray-800 font-medium py-3 px-6 rounded-lg shadow-md hover:bg-gray-500 transition-colors duration-200" style="display: none;">Reset</button>
 
         <!-- Canvas for taking a photo from the video feed -->
         <canvas id="canvas" style="display: none;"></canvas>
+        <canvas id="processed-canvas" style="display: none;"></canvas>
 
         <!-- Message/Status Display -->
         <div id="status-container" class="bg-gray-100 w-full p-4 rounded-lg shadow-inner message-box">
@@ -79,10 +99,15 @@
     <script>
         const video = document.getElementById('video-stream');
         const imagePreview = document.getElementById('image-preview');
+        const imageContainer = document.getElementById('image-container');
+        const selectionBox = document.getElementById('selection-box');
         const startCameraButton = document.getElementById('start-camera-btn');
         const takePhotoButton = document.getElementById('take-photo-btn');
         const uploadImageInput = document.getElementById('upload-image-input');
+        const extractButton = document.getElementById('extract-btn');
+        const resetButton = document.getElementById('reset-btn');
         const canvas = document.getElementById('canvas');
+        const processedCanvas = document.getElementById('processed-canvas');
         const output = document.getElementById('output');
         const statusContainer = document.getElementById('status-container');
         const statusMessage = document.getElementById('status-message');
@@ -90,8 +115,11 @@
         const modal = document.getElementById('modal');
         const modalText = document.getElementById('modal-text');
         const modalCloseButton = document.getElementById('modal-close-btn');
-        let worker;
+        
         let stream;
+        let worker = null; // Initialize as null to check its readiness
+        let isSelecting = false;
+        let startX, startY;
 
         // Custom function for modal messages
         function showMessage(message) {
@@ -109,23 +137,72 @@
             statusMessage.textContent = message;
         }
 
+        // Disable/enable UI elements for loading state
+        function disableUI(disabled) {
+            startCameraButton.disabled = disabled;
+            takePhotoButton.disabled = disabled;
+            uploadImageInput.disabled = disabled;
+            extractButton.disabled = disabled;
+            resetButton.disabled = disabled;
+            output.disabled = disabled;
+            copyButton.disabled = disabled;
+        }
+
+        // Preprocess image to improve OCR accuracy
+        function preprocessImage(imageDataUrl) {
+            return new Promise((resolve) => {
+                const img = new Image();
+                img.onload = () => {
+                    processedCanvas.width = img.width;
+                    processedCanvas.height = img.height;
+                    const ctx = processedCanvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, processedCanvas.width, processedCanvas.height);
+                    const imageData = ctx.getImageData(0, 0, processedCanvas.width, processedCanvas.height);
+                    const data = imageData.data;
+
+                    for (let i = 0; i < data.length; i += 4) {
+                        const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+                        data[i] = data[i + 1] = data[i + 2] = avg > 128 ? 255 : 0;
+                    }
+                    ctx.putImageData(imageData, 0, 0);
+                    resolve(processedCanvas.toDataURL('image/png'));
+                };
+                img.src = imageDataUrl;
+            });
+        }
+
         // Initialize Tesseract worker
         async function initializeWorker() {
             setStatus("Initializing OCR engine...");
-            worker = await Tesseract.createWorker('eng');
-            setStatus("OCR engine ready.");
+            disableUI(true);
+            try {
+                worker = await Tesseract.createWorker({
+                    logger: m => setStatus(m.status === 'recognizing text' ? `Recognizing text... ${Math.round(m.progress * 100)}%` : m.status)
+                });
+                await worker.loadLanguage('eng');
+                await worker.initialize('eng');
+                setStatus("OCR engine ready. Please start the camera or upload an image.");
+            } catch (error) {
+                console.error("Failed to initialize Tesseract worker:", error);
+                setStatus("Error initializing OCR engine. Please refresh the page.");
+                showMessage("An error occurred while initializing the OCR engine. Please refresh the page.");
+            } finally {
+                disableUI(false);
+            }
         }
 
         // Start the camera feed
         async function startCamera() {
             try {
-                // Request access to the user's camera
                 stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
                 video.srcObject = stream;
                 video.style.display = 'block';
-                imagePreview.style.display = 'none';
+                imageContainer.style.display = 'none';
                 startCameraButton.style.display = 'none';
                 takePhotoButton.style.display = 'block';
+                extractButton.style.display = 'none';
+                resetButton.style.display = 'none';
+                output.value = '';
                 setStatus("Camera is active. Position the text and press 'Take Photo'.");
             } catch (error) {
                 console.error("Error accessing camera:", error);
@@ -140,16 +217,25 @@
         }
 
         // Process an image (either from video or file)
-        async function processImage(source) {
+        async function processImage(source, rect = null) {
             setStatus("Processing image...");
+            disableUI(true);
             try {
-                const { data: { text } } = await worker.recognize(source);
+                if (!worker) {
+                    setStatus("OCR engine is not ready. Please wait.");
+                    return;
+                }
+
+                const processedDataUrl = await preprocessImage(source);
+                const { data: { text } } = await worker.recognize(processedDataUrl, { rectangle: rect });
                 output.value = text;
-                setStatus("OCR complete. Text extracted.");
+                setStatus("OCR complete. Text extracted from selection.");
             } catch (error) {
                 console.error("Error performing OCR:", error);
-                setStatus("Error during OCR. Please try again.");
-                showMessage("An error occurred during OCR. Please try a clearer image.");
+                setStatus("Error during OCR. Please try a clearer image or a different selection.");
+                showMessage("An error occurred during OCR. Please try a clearer image or a different selection.");
+            } finally {
+                disableUI(false);
             }
         }
 
@@ -170,13 +256,15 @@
                 stream.getTracks().forEach(track => track.stop());
                 video.style.display = 'none';
                 takePhotoButton.style.display = 'none';
+                extractButton.style.display = 'block';
+                resetButton.style.display = 'block';
 
                 // Display the captured image on the image preview element
                 const imageDataUrl = canvas.toDataURL('image/png');
                 imagePreview.src = imageDataUrl;
-                imagePreview.style.display = 'block';
+                imageContainer.style.display = 'block';
 
-                processImage(imageDataUrl);
+                setStatus("Use your mouse to drag and select the text you want to extract.");
             } else {
                 showMessage("Camera is not active. Please start the camera first.");
             }
@@ -196,20 +284,91 @@
                     }
 
                     imagePreview.src = e.target.result;
-                    imagePreview.style.display = 'block';
+                    imageContainer.style.display = 'block';
                     startCameraButton.style.display = 'block';
-                    
-                    processImage(e.target.result);
+                    extractButton.style.display = 'block';
+                    resetButton.style.display = 'block';
+                    output.value = '';
+                    setStatus("Drag and select the text you want to extract.");
                 };
                 reader.readAsDataURL(file);
             }
+        });
+
+        // Event listener for the extract button
+        extractButton.addEventListener('click', () => {
+            const rect = selectionBox.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) {
+                showMessage("Please select an area to extract text from.");
+                return;
+            }
+
+            const imageRect = imagePreview.getBoundingClientRect();
+            const scaleX = imagePreview.naturalWidth / imageRect.width;
+            const scaleY = imagePreview.naturalHeight / imageRect.height;
+            
+            const selection = {
+                left: Math.round((rect.left - imageRect.left) * scaleX),
+                top: Math.round((rect.top - imageRect.top) * scaleY),
+                width: Math.round(rect.width * scaleX),
+                height: Math.round(rect.height * scaleY),
+            };
+
+            const source = imagePreview.src;
+            processImage(source, selection);
+        });
+
+        // Event listener for the reset button
+        resetButton.addEventListener('click', () => {
+            // Hide the selection box and clear its size
+            selectionBox.style.width = '0px';
+            selectionBox.style.height = '0px';
+            selectionBox.style.left = '0px';
+            selectionBox.style.top = '0px';
+            selectionBox.style.display = 'none';
+            // Reset to the initial state with image preview and buttons
+            video.style.display = 'none';
+            takePhotoButton.style.display = 'none';
+            extractButton.style.display = 'none';
+            resetButton.style.display = 'none';
+            imageContainer.style.display = 'block';
+            startCameraButton.style.display = 'block';
+            output.value = '';
+            setStatus("Drag and select the text you want to extract.");
+        });
+
+        // Event listeners for selection box drawing
+        imageContainer.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            isSelecting = true;
+            startX = e.offsetX;
+            startY = e.offsetY;
+            selectionBox.style.left = `${startX}px`;
+            selectionBox.style.top = `${startY}px`;
+            selectionBox.style.width = '0px';
+            selectionBox.style.height = '0px';
+            selectionBox.style.display = 'block';
+        });
+
+        imageContainer.addEventListener('mousemove', (e) => {
+            if (!isSelecting) return;
+            const width = e.offsetX - startX;
+            const height = e.offsetY - startY;
+            
+            selectionBox.style.width = `${Math.abs(width)}px`;
+            selectionBox.style.height = `${Math.abs(height)}px`;
+            selectionBox.style.left = `${Math.min(startX, e.offsetX)}px`;
+            selectionBox.style.top = `${Math.min(startY, e.offsetY)}px`;
+        });
+
+        imageContainer.addEventListener('mouseup', () => {
+            isSelecting = false;
         });
 
         // Event listener for the copy button
         copyButton.addEventListener('click', () => {
             if (output.value) {
                 try {
-                    // Use a temporary textarea to copy to clipboard
                     const tempInput = document.createElement('textarea');
                     tempInput.value = output.value;
                     document.body.appendChild(tempInput);
