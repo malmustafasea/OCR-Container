@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Container Location Detector</title>
+    <!-- Inter font from Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Tailwind CSS from CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Tesseract.js for OCR -->
+    <script src='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+        video {
+            width: 100%;
+            height: auto;
+            border-radius: 1rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transform: scaleX(-1); /* Mirror the camera view for a more natural feel */
+        }
+        canvas {
+            display: none; /* Hidden canvas for image capture */
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white p-8 rounded-2xl shadow-lg w-full max-w-2xl transform transition-all duration-300">
+        <h1 class="text-3xl font-bold text-gray-800 mb-2 text-center">AI Container Location Detector</h1>
+        <p class="text-gray-500 mb-6 text-center">Use your camera to scan a Container ID, then input weight data to predict the drop-off location.</p>
+
+        <!-- User ID Display -->
+        <div class="mb-6 bg-gray-50 p-4 rounded-xl">
+            <h2 class="text-lg font-semibold text-gray-700">Your User ID (for internal logging)</h2>
+            <p id="userIdDisplay" class="font-mono text-sm text-gray-600 truncate"></p>
+        </div>
+        
+        <!-- Camera and OCR Section -->
+        <div class="mb-6">
+            <h2 class="text-xl font-bold text-gray-800 mb-2">Scan Container ID</h2>
+            <div class="flex flex-col items-center">
+                <video id="videoElement" autoplay playsinline></video>
+                <canvas id="canvasElement"></canvas>
+                <button id="scanButton" class="w-full mt-4 flex justify-center items-center py-3 px-4 border border-transparent text-sm font-medium rounded-xl text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors duration-300">
+                    Scan Container ID
+                </button>
+                <div id="ocrStatus" class="mt-2 text-sm text-gray-500 hidden">Scanning...</div>
+            </div>
+        </div>
+
+        <!-- Input Section -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+            <div>
+                <label for="containerId" class="block text-sm font-medium text-gray-700">Container ID (from OCR)</label>
+                <input type="text" id="containerId" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm sm:text-sm px-4 py-2 bg-gray-50 cursor-not-allowed" placeholder="Scan to populate" readonly>
+            </div>
+            <div>
+                <label for="initialWeight" class="block text-sm font-medium text-gray-700">Initial Weight (kg)</label>
+                <input type="number" id="initialWeight" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm px-4 py-2 bg-gray-50" placeholder="e.g., 20000">
+            </div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+            <div>
+                <label for="finalWeight" class="block text-sm font-medium text-gray-700">Final Weight (kg)</label>
+                <input type="number" id="finalWeight" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm px-4 py-2 bg-gray-50" placeholder="e.g., 10000">
+            </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4 mb-6">
+            <button id="predictButton" class="w-full md:w-1/2 flex justify-center items-center py-3 px-4 border border-transparent text-sm font-medium rounded-xl text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-300">
+                Simulate Drop-off
+            </button>
+            <button id="clearButton" class="w-full md:w-1/2 flex justify-center items-center py-3 px-4 border border-transparent text-sm font-medium rounded-xl text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors duration-300">
+                Clear Inputs
+            </button>
+        </div>
+
+        <!-- Result Section -->
+        <div id="resultBox" class="bg-blue-50 border border-blue-200 p-6 rounded-2xl hidden mb-6">
+            <h2 class="text-xl font-bold text-blue-800 mb-2">Prediction Result</h2>
+            <p id="predictionText" class="text-gray-700 text-lg"></p>
+        </div>
+
+        <!-- Data Log Section -->
+        <div class="bg-gray-50 p-6 rounded-2xl border border-gray-200">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">Drop-off History</h2>
+            <div id="loading" class="text-gray-500 text-center animate-pulse">Loading history...</div>
+            <ul id="historyList" class="space-y-4">
+                <!-- Drop-off history will be displayed here -->
+            </ul>
+        </div>
+        
+        <!-- Custom Modal for Alerts -->
+        <div id="modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden items-center justify-center p-4 z-50">
+            <div class="bg-white p-8 rounded-lg shadow-xl max-w-sm w-full transform transition-all duration-300 scale-95">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 id="modalTitle" class="text-xl font-bold text-gray-800"></h3>
+                    <button id="closeModal" class="text-gray-400 hover:text-gray-600">&times;</button>
+                </div>
+                <p id="modalMessage" class="text-gray-700 mb-6"></p>
+                <div class="flex justify-end">
+                    <button id="modalOkay" class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors duration-200">Okay</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase and Application Logic -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Firebase configuration and initialization
+        setLogLevel('debug');
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+        const userIdDisplay = document.getElementById('userIdDisplay');
+        const videoElement = document.getElementById('videoElement');
+        const canvasElement = document.getElementById('canvasElement');
+        const containerIdInput = document.getElementById('containerId');
+        const historyList = document.getElementById('historyList');
+        const loadingSpinner = document.getElementById('loading');
+        const scanButton = document.getElementById('scanButton');
+        const predictButton = document.getElementById('predictButton');
+        const clearButton = document.getElementById('clearButton');
+        const initialWeightInput = document.getElementById('initialWeight');
+        const finalWeightInput = document.getElementById('finalWeight');
+        const resultBox = document.getElementById('resultBox');
+        const predictionText = document.getElementById('predictionText');
+        const ocrStatus = document.getElementById('ocrStatus');
+        const modal = document.getElementById('modal');
+        const modalTitle = document.getElementById('modalTitle');
+        const modalMessage = document.getElementById('modalMessage');
+        const closeModal = document.getElementById('closeModal');
+        const modalOkay = document.getElementById('modalOkay');
+
+        let currentUserId = null;
+        let dataCollectionRef = null;
+
+        // --- Firebase Authentication and Initialization ---
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                currentUserId = user.uid;
+                userIdDisplay.textContent = currentUserId;
+                console.log("User signed in with UID:", currentUserId);
+
+                // Set up Firestore collection reference for the current user
+                dataCollectionRef = collection(db, `artifacts/${appId}/users/${currentUserId}/dropoff_data`);
+                setupRealtimeListener();
+
+            } else {
+                console.log("No user signed in. Signing in anonymously...");
+                try {
+                    const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+                    if (token) {
+                        await signInWithCustomToken(auth, token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                } catch (error) {
+                    console.error("Firebase Auth Error:", error);
+                    showModal("Authentication Error", "Could not sign in to Firebase. Please try again later.");
+                }
+            }
+        });
+
+        // --- Custom Modal Functions (Replaces alert() and confirm()) ---
+        function showModal(title, message) {
+            modalTitle.textContent = title;
+            modalMessage.textContent = message;
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+
+        function hideModal() {
+            modal.classList.remove('flex');
+            modal.classList.add('hidden');
+        }
+
+        closeModal.addEventListener('click', hideModal);
+        modalOkay.addEventListener('click', hideModal);
+
+        // --- Camera and OCR Logic ---
+        const worker = await Tesseract.createWorker('eng', 1, {
+            logger: m => {
+                console.log(m);
+                if (m.status) {
+                    ocrStatus.textContent = `Status: ${m.status.charAt(0).toUpperCase() + m.status.slice(1)}...`;
+                    ocrStatus.classList.remove('hidden');
+                }
+            }
+        });
+
+        // Start camera feed on window load
+        window.onload = function() {
+            startCamera();
+        };
+        
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+                videoElement.srcObject = stream;
+            } catch (err) {
+                console.error("Error accessing camera:", err);
+                showModal("Camera Access Denied", "Please allow camera access to use this feature.");
+                scanButton.disabled = true;
+            }
+        }
+
+        // Event listener for the Scan button
+        scanButton.addEventListener('click', async () => {
+            if (videoElement.srcObject) {
+                scanButton.disabled = true;
+                ocrStatus.classList.remove('hidden');
+                ocrStatus.textContent = 'Scanning...';
+
+                // Capture a frame from the video
+                const context = canvasElement.getContext('2d');
+                canvasElement.width = videoElement.videoWidth;
+                canvasElement.height = videoElement.videoHeight;
+                context.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+
+                // Perform OCR on the captured frame
+                const { data: { text } } = await worker.recognize(canvasElement);
+
+                // Clean and populate the input field
+                const cleanedText = text.replace(/[^a-zA-Z0-9]/g, '').trim(); // Remove non-alphanumeric characters
+                containerIdInput.value = cleanedText;
+                
+                ocrStatus.textContent = `Scan complete. ID found: ${cleanedText}`;
+                scanButton.disabled = false;
+            } else {
+                showModal("Camera Not Ready", "Please wait for the camera to start or check your permissions.");
+            }
+        });
+
+
+        // --- Simple K-Nearest Neighbors (KNN) AI Model for Simulation ---
+        // This is a hard-coded dataset for demonstration purposes.
+        const modelData = [
+            { location: "Warehouse A", weight_diff: 10000 },
+            { location: "Warehouse A", weight_diff: 9800 },
+            { location: "Warehouse A", weight_diff: 10200 },
+            { location: "Depot B", weight_diff: 15000 },
+            { location: "Depot B", weight_diff: 15150 },
+            { location: "Depot B", weight_diff: 14950 },
+            { location: "Port C", weight_diff: 12500 },
+            { location: "Port C", weight_diff: 12700 },
+            { location: "Port C", weight_diff: 12300 },
+            { location: "Freight Yard D", weight_diff: 11000 },
+            { location: "Freight Yard D", weight_diff: 11050 },
+            { location: "Freight Yard D", weight_diff: 10900 }
+        ];
+
+        // The KNN algorithm function
+        function predictLocation(weightDiff, k) {
+            const distances = modelData.map(point => {
+                const distance = Math.abs(point.weight_diff - weightDiff);
+                return { distance, location: point.location };
+            });
+
+            distances.sort((a, b) => a.distance - b.distance);
+            const nearestNeighbors = distances.slice(0, k);
+
+            const locationCounts = nearestNeighbors.reduce((counts, neighbor) => {
+                counts[neighbor.location] = (counts[neighbor.location] || 0) + 1;
+                return counts;
+            }, {});
+
+            let bestMatch = null;
+            let maxCount = 0;
+            for (const location in locationCounts) {
+                if (locationCounts[location] > maxCount) {
+                    maxCount = locationCounts[location];
+                    bestMatch = location;
+                }
+            }
+
+            return bestMatch;
+        }
+
+        // --- Event Listeners and Logic ---
+        predictButton.addEventListener('click', async () => {
+            const containerId = containerIdInput.value.trim();
+            const initialWeight = parseFloat(initialWeightInput.value);
+            const finalWeight = parseFloat(finalWeightInput.value);
+
+            if (!containerId) {
+                showModal("Input Error", "Please scan or enter a Container ID.");
+                return;
+            }
+
+            if (isNaN(initialWeight) || isNaN(finalWeight) || initialWeight <= finalWeight) {
+                showModal("Input Error", "Please enter valid weights. Initial weight must be greater than the final weight.");
+                return;
+            }
+
+            const weightDiff = initialWeight - finalWeight;
+
+            // Make a prediction using the simulated AI model
+            const predictedLocation = predictLocation(weightDiff, 3);
+
+            // Display the result
+            predictionText.innerHTML = `Container ID: <span class="font-bold text-blue-600">${containerId}</span><br>Based on the weight difference of <span class="font-bold">${weightDiff.toFixed(2)} kg</span>, the predicted drop-off location is: <span class="font-bold text-blue-600">${predictedLocation}</span>`;
+            resultBox.classList.remove('hidden');
+
+            // Save the event to Firestore
+            if (dataCollectionRef) {
+                try {
+                    const newDropoff = {
+                        containerId: containerId,
+                        initialWeight: initialWeight,
+                        finalWeight: finalWeight,
+                        predictedLocation: predictedLocation,
+                        timestamp: new Date().toISOString()
+                    };
+                    await addDoc(dataCollectionRef, newDropoff);
+                    console.log("Drop-off event logged to Firestore.");
+                } catch (error) {
+                    console.error("Error writing document:", error);
+                    showModal("Database Error", "Failed to log the drop-off event. Check the console for details.");
+                }
+            }
+        });
+
+        clearButton.addEventListener('click', () => {
+            containerIdInput.value = '';
+            initialWeightInput.value = '';
+            finalWeightInput.value = '';
+            resultBox.classList.add('hidden');
+            ocrStatus.classList.add('hidden');
+        });
+
+        // --- Real-time Firestore Listener ---
+        function setupRealtimeListener() {
+            if (!dataCollectionRef) {
+                console.error("Firestore collection reference not available.");
+                return;
+            }
+
+            const q = query(dataCollectionRef);
+
+            onSnapshot(q, (querySnapshot) => {
+                const history = [];
+                querySnapshot.forEach((doc) => {
+                    history.push({ id: doc.id, ...doc.data() });
+                });
+
+                // Sort by timestamp in descending order
+                history.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+                
+                renderHistory(history);
+            }, (error) => {
+                console.error("Error listening to drop-off history:", error);
+                loadingSpinner.textContent = "Error loading history. Please check the console.";
+            });
+        }
+
+        function renderHistory(history) {
+            historyList.innerHTML = '';
+            loadingSpinner.classList.add('hidden');
+            if (history.length === 0) {
+                historyList.innerHTML = '<li class="text-gray-500 text-center">No drop-off events logged yet.</li>';
+                return;
+            }
+            history.forEach(item => {
+                const li = document.createElement('li');
+                li.className = 'bg-white p-4 rounded-xl shadow border border-gray-100 transition-shadow duration-300 hover:shadow-md';
+                const formattedDate = new Date(item.timestamp).toLocaleString();
+                li.innerHTML = `
+                    <p class="text-gray-800"><span class="font-semibold text-blue-600">${item.predictedLocation}</span></p>
+                    <p class="text-gray-600 text-sm">Container ID: <span class="font-medium">${item.containerId}</span></p>
+                    <p class="text-gray-600 text-sm">Initial Weight: <span class="font-medium">${item.initialWeight} kg</span></p>
+                    <p class="text-gray-600 text-sm">Final Weight: <span class="font-medium">${item.finalWeight} kg</span></p>
+                    <p class="text-gray-400 text-xs mt-1">Logged on ${formattedDate}</p>
+                `;
+                historyList.appendChild(li);
+            });
+        }
+    </script>
+</body>
+</html>
