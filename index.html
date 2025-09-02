@@ -95,6 +95,14 @@
             <textarea id="output" readonly class="w-full h-48 p-3 rounded-lg border border-gray-300 bg-white text-gray-800 resize-none font-mono"></textarea>
             <button id="copy-btn" class="w-full bg-gray-200 text-gray-700 font-medium py-2 px-4 rounded-lg hover:bg-gray-300 transition-colors duration-200">Copy to Clipboard</button>
         </div>
+
+        <!-- New section for Drop off Location -->
+        <div class="w-full bg-gray-50 p-6 rounded-xl shadow-md space-y-4">
+            <h2 class="text-xl font-semibold text-gray-700">Drop off Location</h2>
+            <p id="location-status" class="text-lg text-gray-600 italic">No location data available yet.</p>
+            <button id="get-location-btn" class="w-full bg-emerald-600 text-white font-medium py-3 px-6 rounded-lg shadow-md hover:bg-emerald-700 transition-colors duration-200">Get Drop off Location</button>
+        </div>
+
     </div>
 
     <script>
@@ -116,6 +124,8 @@
         const modal = document.getElementById('modal');
         const modalText = document.getElementById('modal-text');
         const modalCloseButton = document.getElementById('modal-close-btn');
+        const getLocationButton = document.getElementById('get-location-btn');
+        const locationStatusDisplay = document.getElementById('location-status');
         
         let stream;
         let worker = null; // Initialize as null to check its readiness
@@ -147,6 +157,7 @@
             resetButton.disabled = disabled;
             output.disabled = disabled;
             copyButton.disabled = disabled;
+            getLocationButton.disabled = disabled;
         }
 
         // Preprocess image to improve OCR accuracy
@@ -237,6 +248,48 @@
                 showMessage("An error occurred during OCR. Please try a clearer image or a different selection.");
             } finally {
                 disableUI(false);
+            }
+        }
+
+        // Function to handle GPS location retrieval
+        function getGeolocation() {
+            console.log("Attempting to get geolocation...");
+            if ("geolocation" in navigator) {
+                locationStatusDisplay.textContent = "Getting your location...";
+                getLocationButton.disabled = true;
+
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        const latitude = position.coords.latitude.toFixed(6);
+                        const longitude = position.coords.longitude.toFixed(6);
+                        locationStatusDisplay.textContent = `Latitude: ${latitude}, Longitude: ${longitude}`;
+                        getLocationButton.disabled = false;
+                    },
+                    (error) => {
+                        console.error("Error getting location:", error.message, error);
+                        getLocationButton.disabled = false;
+                        let errorMessage;
+                        switch (error.code) {
+                            case error.PERMISSION_DENIED:
+                                errorMessage = "Permission to access location was denied. Please enable it in your browser settings.";
+                                break;
+                            case error.POSITION_UNAVAILABLE:
+                                errorMessage = "Location information is unavailable.";
+                                break;
+                            case error.TIMEOUT:
+                                errorMessage = "The request to get user location timed out.";
+                                break;
+                            default:
+                                errorMessage = "An unknown error occurred while getting location.";
+                        }
+                        locationStatusDisplay.textContent = errorMessage;
+                        showMessage(errorMessage);
+                    }
+                );
+            } else {
+                const errorMessage = "Geolocation is not supported by your browser.";
+                locationStatusDisplay.textContent = errorMessage;
+                showMessage(errorMessage);
             }
         }
 
@@ -401,6 +454,9 @@
                 showMessage("No text to copy.");
             }
         });
+
+        // Event listener for the new GPS location button
+        getLocationButton.addEventListener('click', getGeolocation);
 
         // Initialize the OCR worker on page load
         window.onload = initializeWorker;
